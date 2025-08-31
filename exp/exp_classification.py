@@ -21,8 +21,9 @@ class Exp_Classification(Exp_Basic):
         # model input depends on data
         train_data, train_loader = self._get_data(flag='train')
         test_data, test_loader = self._get_data(flag='test')
-        self.args.seq_len = max(train_data.max_seq_len, test_data.max_seq_len)
-        self.args.pred_len = 0
+        # Fix sequence and prediction length from configs
+        self.args.seq_len = self.args.seq_len
+        self.args.pred_len = self.args.pred_len
         self.args.enc_in = train_data.feature_df.shape[1]
         self.args.num_class = len(train_data.class_names)
         # model init
