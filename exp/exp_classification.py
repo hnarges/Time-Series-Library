@@ -24,7 +24,7 @@ class Exp_Classification(Exp_Basic):
         # Fix sequence and prediction length from configs
         self.args.seq_len = self.args.seq_len
         self.args.pred_len = self.args.pred_len
-        self.args.enc_in = train_data.feature_df.shape[1]
+        self.args.enc_in = train_data.data_x.shape[1]
         self.args.num_class = len(train_data.class_names)
         # model init
         model = self.model_dict[self.args.model].Model(self.args).float()
