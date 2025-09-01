@@ -1,50 +1,86 @@
-from data_provider.data_loader import Dataset_Custom
+from data_provider.data_loader import Dataset_ETT_hour, Dataset_ETT_minute, Dataset_Custom, Dataset_M4, PSMSegLoader, \
+    MSLSegLoader, SMAPSegLoader, SMDSegLoader, SWATSegLoader, UEAloader
+from data_provider.uea import collate_fn
 from torch.utils.data import DataLoader
 
-def data_provider(args, flag):
-    """
-    Unified data provider for all tasks using CustomDataset.
-    Supports training, validation, testing, classification, and anomaly detection.
-    """
+data_dict = {
+    'ETTh1': Dataset_ETT_hour,
+    'ETTh2': Dataset_ETT_hour,
+    'ETTm1': Dataset_ETT_minute,
+    'ETTm2': Dataset_ETT_minute,
+    'custom': Dataset_Custom,
+    'm4': Dataset_M4,
+    'PSM': PSMSegLoader,
+    'MSL': MSLSegLoader,
+    'SMAP': SMAPSegLoader,
+    'SMD': SMDSegLoader,
+    'SWAT': SWATSegLoader,
+    'UEA': UEAloader
+}
 
-    # Decide if time features are encoded
+
+def data_provider(args, flag):
+    Data = data_dict[args.data]
     timeenc = 0 if args.embed != 'timeF' else 1
 
-    # Shuffle only for training
-    shuffle_flag = flag.lower() == 'train'
+    shuffle_flag = False if (flag == 'test' or flag == 'TEST') else True
     drop_last = False
     batch_size = args.batch_size
     freq = args.freq
 
-    # Dataset initialization
-    data_set = Dataset_Custom(
-        args=args,
-        root_path=args.root_path,
-        data_path=getattr(args, "data_path", None),
-        flag=flag,
-        size=[args.seq_len, getattr(args, "label_len", 0), getattr(args, "pred_len", 0)],
-        features=getattr(args, "features", "S"),
-        target=getattr(args, "target", "OT"),
-        timeenc=timeenc,
-        freq=freq,
-        seasonal_patterns=getattr(args, "seasonal_patterns", None),
-        augmentation_ratio=getattr(args, "augmentation_ratio", 0.0)
-    )
+    if args.task_name == 'anomaly_detection':
+        drop_last = False
+        data_set = Data(
+            args = args,
+            root_path=args.root_path,
+            win_size=args.seq_len,
+            flag=flag,
+        )
+        print(flag, len(data_set))
+        data_loader = DataLoader(
+            data_set,
+            batch_size=batch_size,
+            shuffle=shuffle_flag,
+            num_workers=args.num_workers,
+            drop_last=drop_last)
+        return data_set, data_loader
+    elif args.task_name == 'classification':
+        drop_last = False
+        data_set = Data(
+            args = args,
+            root_path=args.root_path,
+            flag=flag,
+        )
 
-    # Collate function only needed for classification tasks
-    collate = None
-    if args.task_name == 'classification':
-        from data_provider.uea import collate_fn
-        collate = lambda x: collate_fn(x, max_len=args.seq_len)
-
-    data_loader = DataLoader(
-        data_set,
-        batch_size=batch_size,
-        shuffle=shuffle_flag,
-        num_workers=args.num_workers,
-        drop_last=drop_last,
-        collate_fn=collate
-    )
-
-    print(f"{flag} set size: {len(data_set)}")
-    return data_set, data_loader
+        data_loader = DataLoader(
+            data_set,
+            batch_size=batch_size,
+            shuffle=shuffle_flag,
+            num_workers=args.num_workers,
+            drop_last=drop_last,
+            collate_fn=lambda x: collate_fn(x, max_len=args.seq_len)
+        )
+        return data_set, data_loader
+    else:
+        if args.data == 'm4':
+            drop_last = False
+        data_set = Data(
+            args = args,
+            root_path=args.root_path,
+            data_path=args.data_path,
+            flag=flag,
+            size=[args.seq_len, args.label_len, args.pred_len],
+            features=args.features,
+            target=args.target,
+            timeenc=timeenc,
+            freq=freq,
+            seasonal_patterns=args.seasonal_patterns
+        )
+        print(flag, len(data_set))
+        data_loader = DataLoader(
+            data_set,
+            batch_size=batch_size,
+            shuffle=shuffle_flag,
+            num_workers=args.num_workers,
+            drop_last=drop_last)
+        return data_set, data_loader
