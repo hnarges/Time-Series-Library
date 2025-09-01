@@ -25,7 +25,7 @@ class Exp_Classification(Exp_Basic):
         self.args.seq_len = self.args.seq_len
         self.args.pred_len = self.args.pred_len
         self.args.enc_in = train_data.data_x.shape[1]
-        self.args.num_class = len(train_data.class_names)
+        self.args.num_class = len(set(train_data.label)) 
         # model init
         model = self.model_dict[self.args.model].Model(self.args).float()
         if self.args.use_multi_gpu and self.args.use_gpu:
