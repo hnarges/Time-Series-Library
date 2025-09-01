@@ -138,7 +138,17 @@ class Dataset_ETT_minute(Dataset):
         self.root_path = root_path
         self.data_path = data_path
         self.__read_data__()
+        
+        self.features = features
+        self.target = target
+        self.scale = scale
+        self.timeenc = timeenc
+        self.freq = freq
 
+        self.root_path = root_path
+        self.data_path = data_path
+        self.__read_data__()
+        self.class_names = list(set(self.label))
     def __read_data__(self):
         self.scaler = StandardScaler()
         df_raw = pd.read_csv(os.path.join(self.root_path,
@@ -234,6 +244,7 @@ class Dataset_Custom(Dataset):
         self.root_path = root_path
         self.data_path = data_path
         self.__read_data__()
+                     
         class Dataset_Custom(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
