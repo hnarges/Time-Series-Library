@@ -222,6 +222,14 @@ from torch.utils.data import Dataset
 from utils.timefeatures import time_features
 from utils.augmentation import run_augmentation_single
 
+import os
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+from torch.utils.data import Dataset
+from utils.timefeatures import time_features
+from utils.augmentation import run_augmentation_single
+
 class Dataset_Custom(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
@@ -251,12 +259,12 @@ class Dataset_Custom(Dataset):
         self.root_path = root_path
         self.data_path = data_path
 
-        # Read data and create labels
+        # Read data
         self.__read_data__()
 
-        # Define labels and class names
-        self.label = self.data_y[:, -1]  # assuming last column is target
-        self.class_names = list(set(self.label))
+        # Define labels and class names (for binary classification)
+        self.label = self.data_y[:, -1].astype(int)  # make sure labels are int 0 or 1
+        self.class_names = [0, 1]  # binary classes
 
     def __read_data__(self):
         self.scaler = StandardScaler()
@@ -293,7 +301,7 @@ class Dataset_Custom(Dataset):
             data = df_data.values
 
         # Time features
-        df_stamp = df_raw[['date']][border1:border2]
+        df_stamp = df_raw[['date']][border1:border2].copy()
         df_stamp['date'] = pd.to_datetime(df_stamp['date'])
         if self.timeenc == 0:
             df_stamp['month'] = df_stamp.date.apply(lambda x: x.month)
