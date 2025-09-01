@@ -230,12 +230,13 @@ from torch.utils.data import Dataset
 from utils.timefeatures import time_features
 from utils.augmentation import run_augmentation_single
 
+# ---------------- Dataset_Custom ----------------
 class Dataset_Custom(Dataset):
     def __init__(self, args, root_path, flag='train', size=None,
                  features='S', data_path='ETTh1.csv',
                  target='OT', scale=True, timeenc=0, freq='h', seasonal_patterns=None):
         self.args = args
-        
+
         # Sequence settings
         if size is None:
             self.seq_len = 24 * 4 * 4
@@ -256,15 +257,16 @@ class Dataset_Custom(Dataset):
         self.timeenc = timeenc
         self.freq = freq
 
+        # Paths
         self.root_path = root_path
         self.data_path = data_path
 
         # Read data
         self.__read_data__()
 
-        # Define labels and class names (for binary classification)
-        self.label = self.data_y[:, -1].astype(int)  # make sure labels are int 0 or 1
-        self.class_names = [0, 1]  # binary classes
+        # Labels and class names (must exist for Exp_Classification)
+        self.label = self.data_y[:, -1].astype(int)  # ensure integer labels
+        self.class_names = list(np.unique(self.label))  # unique class values
 
     def __read_data__(self):
         self.scaler = StandardScaler()
@@ -285,7 +287,7 @@ class Dataset_Custom(Dataset):
         border1 = border1s[self.set_type]
         border2 = border2s[self.set_type]
 
-        # Select features
+        # Features selection
         if self.features in ['M', 'MS']:
             cols_data = df_raw.columns[1:]
             df_data = df_raw[cols_data]
@@ -341,6 +343,7 @@ class Dataset_Custom(Dataset):
 
     def inverse_transform(self, data):
         return self.scaler.inverse_transform(data)
+
 
 
 
