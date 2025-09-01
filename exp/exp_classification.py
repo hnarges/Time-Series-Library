@@ -1,13 +1,14 @@
-import os
-import time
-import warnings
+from data_provider.data_factory import data_provider
+from exp.exp_basic import Exp_Basic
+from utils.tools import EarlyStopping, adjust_learning_rate, cal_accuracy
 import torch
 import torch.nn as nn
 from torch import optim
+import os
+import time
+import warnings
 import numpy as np
-from data_provider.data_factory import data_provider
-from exp.exp_basic import Exp_Basic
-from utils.tools import EarlyStopping, cal_accuracy
+import pdb
 
 warnings.filterwarnings('ignore')
 
@@ -15,130 +16,177 @@ warnings.filterwarnings('ignore')
 class Exp_Classification(Exp_Basic):
     def __init__(self, args):
         super(Exp_Classification, self).__init__(args)
-        self.device = torch.device('cuda' if args.use_gpu else 'cpu')
 
     def _build_model(self):
-        # Load sample data to get input size
-        train_data, _ = self._get_data(flag='train')
+        # model input depends on data
+        train_data, train_loader = self._get_data(flag='train')
+        test_data, test_loader = self._get_data(flag='test')
+        # Fix sequence and prediction length from configs
+        self.args.seq_len = self.args.seq_len
+        self.args.pred_len = self.args.pred_len
         self.args.enc_in = train_data.data_x.shape[1]
         self.args.num_class = len(train_data.class_names)
-        
-        # Initialize model
+        # model init
         model = self.model_dict[self.args.model].Model(self.args).float()
         if self.args.use_multi_gpu and self.args.use_gpu:
             model = nn.DataParallel(model, device_ids=self.args.device_ids)
-        return model.to(self.device)
+        return model
 
     def _get_data(self, flag):
-        dataset, loader = data_provider(self.args, flag)
-        return dataset, loader
+        data_set, data_loader = data_provider(self.args, flag)
+        return data_set, data_loader
 
     def _select_optimizer(self):
-        return optim.RAdam(self.model.parameters(), lr=self.args.learning_rate)
+        # model_optim = optim.Adam(self.model.parameters(), lr=self.args.learning_rate)
+        model_optim = optim.RAdam(self.model.parameters(), lr=self.args.learning_rate)
+        return model_optim
 
     def _select_criterion(self):
-        return nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss()
+        return criterion
 
-    def vali(self, data_set, data_loader, criterion):
-        self.model.eval()
+    def vali(self, vali_data, vali_loader, criterion):
         total_loss = []
-        all_preds, all_trues = [], []
-
+        preds = []
+        trues = []
+        self.model.eval()
         with torch.no_grad():
-            for batch_x, label, padding_mask in data_loader:
+            for i, (batch_x, label, padding_mask) in enumerate(vali_loader):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = padding_mask.float().to(self.device)
                 label = label.to(self.device)
 
                 outputs = self.model(batch_x, padding_mask, None, None)
-                loss = criterion(outputs, label.long().squeeze())
+
+                pred = outputs.detach()
+                loss = criterion(pred, label.long().squeeze())
                 total_loss.append(loss.item())
 
-                all_preds.append(outputs)
-                all_trues.append(label)
+                preds.append(outputs.detach())
+                trues.append(label)
 
-        preds = torch.cat(all_preds, 0)
-        trues = torch.cat(all_trues, 0)
-        probs = torch.softmax(preds, dim=1)
-        predictions = torch.argmax(probs, dim=1).cpu().numpy()
+        total_loss = np.average(total_loss)
+
+        preds = torch.cat(preds, 0)
+        trues = torch.cat(trues, 0)
+        probs = torch.nn.functional.softmax(preds)  # (total_samples, num_classes) est. prob. for each class and sample
+        predictions = torch.argmax(probs, dim=1).cpu().numpy()  # (total_samples,) int class index for each sample
         trues = trues.flatten().cpu().numpy()
         accuracy = cal_accuracy(predictions, trues)
 
-        return np.mean(total_loss), accuracy
+        self.model.train()
+        return total_loss, accuracy
 
     def train(self, setting):
-        train_data, train_loader = self._get_data('train')
-        val_data, val_loader = self._get_data('val')
-        test_data, test_loader = self._get_data('test')
+        train_data, train_loader = self._get_data(flag='train')
+        vali_data, vali_loader = self._get_data(flag='val')
+        test_data, test_loader = self._get_data(flag='test')
 
-        # Checkpoints
         path = os.path.join(self.args.checkpoints, setting)
-        os.makedirs(path, exist_ok=True)
+        if not os.path.exists(path):
+            os.makedirs(path)
+
+        time_now = time.time()
+
+        train_steps = len(train_loader)
+        early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         model_optim = self._select_optimizer()
         criterion = self._select_criterion()
-        early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
 
         for epoch in range(self.args.train_epochs):
+            iter_count = 0
+            train_loss = []
+
             self.model.train()
-            train_losses = []
-            start_time = time.time()
+            epoch_time = time.time()
 
             for i, (batch_x, label, padding_mask) in enumerate(train_loader):
+                iter_count += 1
+                model_optim.zero_grad()
+
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = padding_mask.float().to(self.device)
                 label = label.to(self.device)
 
-                model_optim.zero_grad()
                 outputs = self.model(batch_x, padding_mask, None, None)
-                loss = criterion(outputs, label.long().squeeze())
+                loss = criterion(outputs, label.long().squeeze(-1))
+                train_loss.append(loss.item())
+
+                if (i + 1) % 100 == 0:
+                    print("\titers: {0}, epoch: {1} | loss: {2:.7f}".format(i + 1, epoch + 1, loss.item()))
+                    speed = (time.time() - time_now) / iter_count
+                    left_time = speed * ((self.args.train_epochs - epoch) * train_steps - i)
+                    print('\tspeed: {:.4f}s/iter; left time: {:.4f}s'.format(speed, left_time))
+                    iter_count = 0
+                    time_now = time.time()
+
                 loss.backward()
-                nn.utils.clip_grad_norm_(self.model.parameters(), 4.0)
+                nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=4.0)
                 model_optim.step()
-                train_losses.append(loss.item())
 
-            train_loss = np.mean(train_losses)
-            val_loss, val_acc = self.vali(val_data, val_loader, criterion)
-            test_loss, test_acc = self.vali(test_data, test_loader, criterion)
+            print("Epoch: {} cost time: {}".format(epoch + 1, time.time() - epoch_time))
+            train_loss = np.average(train_loss)
+            vali_loss, val_accuracy = self.vali(vali_data, vali_loader, criterion)
+            test_loss, test_accuracy = self.vali(test_data, test_loader, criterion)
 
-            print(f"Epoch {epoch+1}/{self.args.train_epochs} | "
-                  f"Train Loss: {train_loss:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | "
-                  f"Test Loss: {test_loss:.4f} | Test Acc: {test_acc:.4f} | "
-                  f"Time: {time.time() - start_time:.1f}s")
-
-            early_stopping(-val_acc, self.model, path)
+            print(
+                "Epoch: {0}, Steps: {1} | Train Loss: {2:.3f} Vali Loss: {3:.3f} Vali Acc: {4:.3f} Test Loss: {5:.3f} Test Acc: {6:.3f}"
+                .format(epoch + 1, train_steps, train_loss, vali_loss, val_accuracy, test_loss, test_accuracy))
+            early_stopping(-val_accuracy, self.model, path)
             if early_stopping.early_stop:
-                print("Early stopping triggered.")
+                print("Early stopping")
                 break
 
-        # Load best model
-        best_model_path = os.path.join(path, 'checkpoint.pth')
+        best_model_path = path + '/' + 'checkpoint.pth'
         self.model.load_state_dict(torch.load(best_model_path))
+
         return self.model
 
-    def test(self, setting):
-        test_data, test_loader = self._get_data('test')
-        best_model_path = os.path.join(self.args.checkpoints, setting, 'checkpoint.pth')
-        self.model.load_state_dict(torch.load(best_model_path))
-        self.model.eval()
+    def test(self, setting, test=0):
+        test_data, test_loader = self._get_data(flag='test')
+        if test:
+            print('loading model')
+            self.model.load_state_dict(torch.load(os.path.join('./checkpoints/' + setting, 'checkpoint.pth')))
 
-        all_preds, all_trues = [], []
+        preds = []
+        trues = []
+        folder_path = './test_results/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        self.model.eval()
         with torch.no_grad():
-            for batch_x, label, padding_mask in test_loader:
+            for i, (batch_x, label, padding_mask) in enumerate(test_loader):
                 batch_x = batch_x.float().to(self.device)
                 padding_mask = padding_mask.float().to(self.device)
                 label = label.to(self.device)
 
                 outputs = self.model(batch_x, padding_mask, None, None)
-                all_preds.append(outputs)
-                all_trues.append(label)
 
-        preds = torch.cat(all_preds, 0)
-        trues = torch.cat(all_trues, 0)
-        probs = torch.softmax(preds, dim=1)
-        predictions = torch.argmax(probs, dim=1).cpu().numpy()
+                preds.append(outputs.detach())
+                trues.append(label)
+
+        preds = torch.cat(preds, 0)
+        trues = torch.cat(trues, 0)
+        print('test shape:', preds.shape, trues.shape)
+
+        probs = torch.nn.functional.softmax(preds)  # (total_samples, num_classes) est. prob. for each class and sample
+        predictions = torch.argmax(probs, dim=1).cpu().numpy()  # (total_samples,) int class index for each sample
         trues = trues.flatten().cpu().numpy()
         accuracy = cal_accuracy(predictions, trues)
-        print(f"Test Accuracy: {accuracy:.4f}")
-        return accuracy
+
+        # result save
+        folder_path = './results/' + setting + '/'
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+
+        print('accuracy:{}'.format(accuracy))
+        file_name='result_classification.txt'
+        f = open(os.path.join(folder_path,file_name), 'a')
+        f.write(setting + "  \n")
+        f.write('accuracy:{}'.format(accuracy))
+        f.write('\n')
+        f.write('\n')
+        f.close()
+        return
